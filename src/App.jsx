@@ -39,18 +39,22 @@ function App() {
 
   // Estado principal carregando do localStorage ou arquivo JSON inicial com migração
   const [products, setProducts] = useState(() => {
+    const initialList = initialProducts.map(p => ({ ...p, isActive: true }));
     try {
       const saved = localStorage.getItem('casae_catalog_products_v3');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          // Merge: keep all parsed products, and append any products from initialProducts that aren't there
+          const parsedIds = new Set(parsed.map(p => p.id));
+          const newFromInitial = initialList.filter(p => !parsedIds.has(p.id));
+          return [...parsed, ...newFromInitial];
         }
       }
     } catch (e) {
       console.error("Erro ao ler produtos do localStorage", e);
     }
-    return initialProducts.map(p => ({ ...p, isActive: true }));
+    return initialList;
   });
 
   // Salvar no localStorage sempre que os produtos mudarem
@@ -89,27 +93,31 @@ function App() {
 
   // Estado de imagens disponíveis (originais, uploads locais e drive importados)
   const [availableImages, setAvailableImages] = useState(() => {
+    const initial = initialProducts.map(p => ({
+      id: p.imageId,
+      name: p.imageName,
+      url: p.imageUrl,
+      isDrive: p.imageUrl.includes('drive.google.com')
+    }));
+    const uniqueInitial = initial.filter((value, index, self) =>
+      self.findIndex(t => t.id === value.id) === index
+    );
+
     try {
       const saved = localStorage.getItem('casae_catalog_available_images_v3');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          // Merge: keep parsed and add any from uniqueInitial that aren't there
+          const parsedIds = new Set(parsed.map(img => img.id));
+          const newFromInitial = uniqueInitial.filter(img => !parsedIds.has(img.id));
+          return [...parsed, ...newFromInitial];
         }
       }
     } catch (e) {
       console.error("Erro ao ler imagens disponíveis", e);
     }
-    // Extrai imagens únicas do products.json original
-    const initial = initialProducts.map(p => ({
-      id: p.imageId,
-      name: p.imageName,
-      url: p.imageUrl,
-      isDrive: true
-    }));
-    return initial.filter((value, index, self) =>
-      self.findIndex(t => t.id === value.id) === index
-    );
+    return uniqueInitial;
   });
 
   // Salvar imagens no localStorage sempre que mudarem

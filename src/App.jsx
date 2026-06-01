@@ -22,13 +22,16 @@ function App() {
 
   // Estado principal carregando do localStorage ou arquivo JSON inicial com migração
   const [products, setProducts] = useState(() => {
-    const saved = localStorage.getItem('casae_catalog_products_v3');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error("Erro ao ler produtos do localStorage", e);
+    try {
+      const saved = localStorage.getItem('casae_catalog_products_v3');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
       }
+    } catch (e) {
+      console.error("Erro ao ler produtos do localStorage", e);
     }
     return initialProducts.map(p => ({ ...p, isActive: true }));
   });
@@ -69,13 +72,16 @@ function App() {
 
   // Estado de imagens disponíveis (originais, uploads locais e drive importados)
   const [availableImages, setAvailableImages] = useState(() => {
-    const saved = localStorage.getItem('casae_catalog_available_images_v3');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {
-        console.error("Erro ao ler imagens disponíveis", e);
+    try {
+      const saved = localStorage.getItem('casae_catalog_available_images_v3');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
       }
+    } catch (e) {
+      console.error("Erro ao ler imagens disponíveis", e);
     }
     // Extrai imagens únicas do products.json original
     const initial = initialProducts.map(p => ({

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Printer, 
   Plus, 
@@ -9,13 +9,12 @@ import {
   Download, 
   Upload, 
   Edit2, 
-  FileText, 
-  Image as ImageIcon,
-  Check,
-  X,
-  FileDown
+  Image as ImageIcon
 } from 'lucide-react';
 import initialProducts from './data/products.json';
+
+// Helper function to generate unique product IDs to satisfy react compiler purity rule
+const generateProductId = () => `prod_${Date.now()}`;
 
 function App() {
   // Lista de categorias oficiais solicitadas pelo usuário
@@ -65,23 +64,243 @@ function App() {
   const [coverImageId, setCoverImageId] = useState(products[0]?.imageId || '12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8');
 
   // Estado da Interface
-  const [activeTab, setActiveTab] = useState('products'); // 'products' ou 'settings'
+  const [activeTab, setActiveTab] = useState('products'); // 'products', 'settings' ou 'uploads'
   const [selectedProduct, setSelectedProduct] = useState(null);
 
-  // Lista de imagens disponíveis dos 50 itens do Drive para atribuição
-  const driveImages = products.map(p => ({
-    filename: p.imageName,
-    id: p.imageId
-  })).filter((value, index, self) => 
-    self.findIndex(t => t.id === value.id) === index
-  );
+  // Estado de imagens disponíveis (originais, uploads locais e drive importados)
+  const [availableImages, setAvailableImages] = useState(() => {
+    const saved = localStorage.getItem('casae_catalog_available_images_v3');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error("Erro ao ler imagens disponíveis", e);
+      }
+    }
+    // Extrai imagens únicas do products.json original
+    const initial = initialProducts.map(p => ({
+      id: p.imageId,
+      name: p.imageName,
+      url: p.imageUrl,
+      isDrive: true
+    }));
+    return initial.filter((value, index, self) =>
+      self.findIndex(t => t.id === value.id) === index
+    );
+  });
+
+  // Salvar imagens no localStorage sempre que mudarem
+  useEffect(() => {
+    localStorage.setItem('casae_catalog_available_images_v3', JSON.stringify(availableImages));
+  }, [availableImages]);
+
+  // Estados para importação do Google Drive
+  const [driveUrlInput, setDriveUrlInput] = useState('https://drive.google.com/drive/folders/1pyRnlVdneHazdxZHCCsuOq6AzWe4mzbT?usp=sharing');
+  const [isImporting, setIsImporting] = useState(false);
 
   // Restaurar dados originais
   const handleResetData = () => {
     if (window.confirm("Deseja mesmo redefinir o catálogo para as 50 fotos originais do Drive com as novas categorias? Suas alterações serão perdidas.")) {
       setProducts(initialProducts.map(p => ({ ...p, isActive: true })));
       setSelectedProduct(null);
+      
+      const initial = initialProducts.map(p => ({
+        id: p.imageId,
+        name: p.imageName,
+        url: p.imageUrl,
+        isDrive: true
+      }));
+      const uniqueInitial = initial.filter((value, index, self) =>
+        self.findIndex(t => t.id === value.id) === index
+      );
+      setAvailableImages(uniqueInitial);
       setCoverImageId(initialProducts[0].imageId);
+    }
+  };
+
+  // Upload Local de Arquivos de Imagem
+  const handleLocalUpload = (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    
+    Array.from(files).forEach(file => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const newImg = {
+          id: `local_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+          name: file.name,
+          url: event.target.result,
+          isDrive: false
+        };
+        setAvailableImages(prev => [newImg, ...prev]);
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  // Importar arquivos/pasta do Google Drive
+  const handleImportFromDrive = async () => {
+    if (!driveUrlInput.trim()) {
+      alert("Por favor, digite um link do Google Drive.");
+      return;
+    }
+
+    setIsImporting(true);
+
+    const isFolder = driveUrlInput.includes('/folders/') || driveUrlInput.includes('/drive/folders/');
+    const isFile = driveUrlInput.includes('/file/d/') || driveUrlInput.includes('id=');
+
+    if (isFolder) {
+      const folderIdMatch = driveUrlInput.match(/\/folders\/([a-zA-Z0-9_-]{28,35})/);
+      const folderId = folderIdMatch ? folderIdMatch[1] : null;
+
+      if (!folderId) {
+        alert("Não foi possível identificar o ID da pasta no link. Verifique o link e tente novamente.");
+        setIsImporting(false);
+        return;
+      }
+
+      try {
+        const targetUrl = `https://drive.google.com/drive/folders/${folderId}`;
+        const proxyUrl = `https://api.codetabs.com/v1/proxy/?quest=${encodeURIComponent(targetUrl)}`;
+
+        const res = await fetch(proxyUrl);
+        if (!res.ok) throw new Error("Erro na resposta do servidor proxy.");
+        
+        const html = await res.text();
+        
+        const regex = /data-id="([a-zA-Z0-9_-]{28,35})"[^>]*?data-tooltip="([^"]+?)(?:\s+Image)?"/g;
+        const results = [];
+        let match;
+        while ((match = regex.exec(html)) !== null) {
+          results.push({ id: match[1], name: match[2].trim() });
+        }
+
+        if (results.length === 0) {
+          const unescapedHtml = html
+            .replace(/\\x22/g, '"')
+            .replace(/\\x5b/g, '[')
+            .replace(/\\x5d/g, ']')
+            .replace(/\\x2f/g, '/');
+          
+          const fbRegex = /"([a-zA-Z0-9_-]{28,35})",\s*\[\s*"([a-zA-Z0-9_-]{20,})"\s*\],\s*"([^"]+)"/g;
+          let fbMatch;
+          while ((fbMatch = fbRegex.exec(unescapedHtml)) !== null) {
+            results.push({ id: fbMatch[1], name: fbMatch[3].trim() });
+          }
+        }
+
+        const uniqueResults = results.filter((val, idx, self) =>
+          self.findIndex(t => t.id === val.id) === idx
+        );
+
+        if (uniqueResults.length === 0) {
+          alert("Nenhuma imagem pública foi encontrada nesta pasta. Certifique-se de que a pasta está compartilhada como 'Qualquer pessoa com o link pode ler'.");
+          setIsImporting(false);
+          return;
+        }
+
+        const newImages = uniqueResults.map(file => ({
+          id: file.id,
+          name: file.name,
+          url: `https://drive.google.com/thumbnail?id=${file.id}&sz=w800`,
+          isDrive: true
+        }));
+
+        setAvailableImages(prev => {
+          const existingIds = new Set(prev.map(img => img.id));
+          const filteredNew = newImages.filter(img => !existingIds.has(img.id));
+          return [...filteredNew, ...prev];
+        });
+
+        alert(`Importadas com sucesso ${uniqueResults.length} imagens da pasta do Google Drive!`);
+      } catch (err) {
+        console.error("Erro ao importar do drive", err);
+        alert("Ocorreu um erro ao importar a pasta. Verifique se o link é público e tente novamente.");
+      }
+    } else if (isFile) {
+      let fileId = null;
+      const fileIdMatch1 = driveUrlInput.match(/\/file\/d\/([a-zA-Z0-9_-]{28,35})/);
+      if (fileIdMatch1) {
+        fileId = fileIdMatch1[1];
+      } else {
+        const fileIdMatch2 = driveUrlInput.match(/[?&]id=([a-zA-Z0-9_-]{28,35})/);
+        if (fileIdMatch2) {
+          fileId = fileIdMatch2[1];
+        }
+      }
+
+      if (!fileId) {
+        alert("Não foi possível identificar o ID do arquivo no link.");
+        setIsImporting(false);
+        return;
+      }
+
+      const newImg = {
+        id: fileId,
+        name: `Drive_File_${fileId.substring(0, 6)}`,
+        url: `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`,
+        isDrive: true
+      };
+
+      setAvailableImages(prev => {
+        if (prev.some(img => img.id === fileId)) {
+          alert("Esta imagem já está na galeria.");
+          return prev;
+        }
+        return [newImg, ...prev];
+      });
+
+      alert("Imagem do Drive adicionada com sucesso!");
+    } else {
+      alert("Link inválido. Insira um link válido de pasta ou de arquivo do Google Drive.");
+    }
+
+    setIsImporting(false);
+  };
+
+  // Criar produto a partir de uma imagem da galeria
+  const handleCreateProductFromImage = (img) => {
+    const newId = generateProductId();
+    const newProd = {
+      id: newId,
+      name: `Novo Item (${img.name.replace(/\.[^/.]+$/, "")})`,
+      category: selectedCategoryFilter === 'Todos' ? 'Decoração' : selectedCategoryFilter,
+      price: 0.00,
+      description: "Escreva uma breve descrição deste produto elegante para casa.",
+      imageName: img.name,
+      imageId: img.id,
+      imageUrl: img.url,
+      isActive: true
+    };
+    setProducts([newProd, ...products]);
+    handleSelectProductForEditing(newProd);
+    alert(`Produto criado com a imagem "${img.name}"!`);
+  };
+
+  // Definir como imagem da capa
+  const handleSetAsCoverImage = (imgId) => {
+    setCoverImageId(imgId);
+    alert("Definido como imagem de destaque da capa!");
+  };
+
+  // Excluir imagem
+  const handleDeleteImage = (imgId) => {
+    const inUse = products.some(p => p.imageId === imgId);
+    const isCover = coverImageId === imgId;
+    
+    if (inUse || isCover) {
+      let msg = "Esta imagem está sendo usada ";
+      if (inUse && isCover) msg += "como capa e por um ou mais produtos.";
+      else if (inUse) msg += "por um ou mais produtos.";
+      else msg += "como capa.";
+      
+      alert(`${msg} Não é possível excluí-la.`);
+      return;
+    }
+
+    if (window.confirm("Excluir esta imagem da galeria?")) {
+      setAvailableImages(availableImages.filter(img => img.id !== imgId));
     }
   };
 
@@ -111,6 +330,7 @@ function App() {
           alert("Formato inválido. O arquivo deve ser um JSON contendo uma lista de produtos.");
         }
       } catch (err) {
+        console.error("Erro ao importar dados", err);
         alert("Erro ao ler o arquivo JSON.");
       }
     };
@@ -118,16 +338,21 @@ function App() {
 
   // Adicionar Novo Produto
   const handleAddProduct = () => {
-    const newId = `prod_${Date.now()}`;
+    const newId = generateProductId();
+    const defaultImg = availableImages[0] || {
+      name: "DSC00001.JPG",
+      id: "12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8",
+      url: "https://drive.google.com/thumbnail?id=12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8&sz=w800"
+    };
     const newProd = {
       id: newId,
       name: "Novo Item de Decoração",
       category: selectedCategoryFilter === 'Todos' ? 'Decoração' : selectedCategoryFilter,
       price: 0.00,
       description: "Escreva uma breve descrição deste produto elegante para casa.",
-      imageName: driveImages[0]?.filename || "DSC00001.JPG",
-      imageId: driveImages[0]?.id || "12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8",
-      imageUrl: `https://drive.google.com/thumbnail?id=${driveImages[0]?.id || "12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8"}&sz=w800`,
+      imageName: defaultImg.name,
+      imageId: defaultImg.id,
+      imageUrl: defaultImg.url,
       isActive: true
     };
     setProducts([newProd, ...products]);
@@ -152,12 +377,12 @@ function App() {
     
     const updated = { ...selectedProduct, [updatedField]: value };
     
-    // Se mudou a imagem do Drive, atualizar a URL
+    // Se mudou a imagem, atualizar a URL
     if (updatedField === 'imageId') {
-      const selectedImg = driveImages.find(img => img.id === value);
+      const selectedImg = availableImages.find(img => img.id === value);
       if (selectedImg) {
-        updated.imageName = selectedImg.filename;
-        updated.imageUrl = `https://drive.google.com/thumbnail?id=${value}&sz=w800`;
+        updated.imageName = selectedImg.name;
+        updated.imageUrl = selectedImg.url;
       }
     }
 
@@ -215,6 +440,9 @@ function App() {
 
   const totalContentPages = pagesOfProducts.length;
 
+  const coverImg = availableImages.find(img => img.id === coverImageId);
+  const coverImgSrc = coverImg ? (coverImg.isDrive ? `https://drive.google.com/thumbnail?id=${coverImg.id}&sz=w1000` : coverImg.url) : `https://drive.google.com/thumbnail?id=${coverImageId}&sz=w1000`;
+
   const handlePrint = () => {
     window.print();
   };
@@ -243,6 +471,13 @@ function App() {
           >
             <Settings size={16} style={{ marginBottom: '-3px', marginRight: '4px' }} />
             Layout & Capa
+          </button>
+          <button 
+            className={`tab-btn ${activeTab === 'uploads' ? 'active' : ''}`}
+            onClick={() => setActiveTab('uploads')}
+          >
+            <Upload size={16} style={{ marginBottom: '-3px', marginRight: '4px' }} />
+            Uploads ({availableImages.length})
           </button>
         </div>
 
@@ -388,14 +623,14 @@ function App() {
                   </div>
 
                   <div className="form-group">
-                    <label>Selecionar Foto (Fotos do Drive)</label>
+                    <label>Selecionar Foto</label>
                     <select
                       value={selectedProduct.imageId}
                       onChange={(e) => handleUpdateProduct('imageId', e.target.value)}
                     >
-                      {driveImages.map((img, idx) => (
+                      {availableImages.map((img) => (
                         <option key={img.id} value={img.id}>
-                          Imagem {idx + 1} ({img.filename})
+                          {img.isDrive ? `Drive: ${img.name}` : `Local: ${img.name}`}
                         </option>
                       ))}
                     </select>
@@ -507,9 +742,9 @@ function App() {
                     value={coverImageId}
                     onChange={(e) => setCoverImageId(e.target.value)}
                   >
-                    {driveImages.map((img, idx) => (
+                    {availableImages.map((img) => (
                       <option key={img.id} value={img.id}>
-                        Imagem {idx + 1} ({img.filename})
+                        {img.isDrive ? `Drive: ${img.name}` : `Local: ${img.name}`}
                       </option>
                     ))}
                   </select>
@@ -623,6 +858,106 @@ function App() {
               </div>
             </div>
           )}
+
+          {/* TAB 3: UPLOADS E GOOGLE DRIVE */}
+          {activeTab === 'uploads' && (
+            <div className="editor-section">
+              <div className="section-title">Upload de Imagens</div>
+              
+              {/* Opção 1: Upload Local */}
+              <div className="upload-box local-upload">
+                <label className="upload-label">
+                  <Upload size={20} />
+                  <span>Selecionar Foto Local</span>
+                  <p>Arraste ou clique para enviar (PNG, JPG)</p>
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    onChange={handleLocalUpload} 
+                    multiple
+                    style={{ display: 'none' }} 
+                  />
+                </label>
+              </div>
+
+              {/* Opção 2: Importar do Drive */}
+              <div className="drive-import-box">
+                <label style={{ fontSize: '11px', fontWeight: 'bold', color: 'var(--text-main)', textTransform: 'uppercase' }}>
+                  Subir Pasta do Google Drive
+                </label>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
+                  <input 
+                    type="text" 
+                    placeholder="Link da pasta do Google Drive..." 
+                    value={driveUrlInput}
+                    onChange={(e) => setDriveUrlInput(e.target.value)}
+                    style={{ flex: 1, fontSize: '13px' }}
+                  />
+                  <button 
+                    className="btn-primary" 
+                    onClick={handleImportFromDrive}
+                    disabled={isImporting}
+                    style={{ padding: '10px 14px' }}
+                  >
+                    {isImporting ? '...' : 'Importar'}
+                  </button>
+                </div>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '6px' }}>
+                  Cole o link de uma pasta compartilhada (Leitor público) do Drive para carregar as fotos no catálogo.
+                </p>
+              </div>
+
+              {/* Galeria de Fotos Disponíveis */}
+              <div className="section-title" style={{ marginTop: '16px' }}>Galeria de Imagens ({availableImages.length})</div>
+              
+              {isImporting && (
+                <div className="loading-spinner-container">
+                  <div className="spinner"></div>
+                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '8px' }}>Carregando fotos do Drive...</p>
+                </div>
+              )}
+
+              <div className="available-images-grid">
+                {availableImages.map((img) => (
+                  <div key={img.id} className="available-image-card">
+                    <img 
+                      src={img.url} 
+                      alt={img.name} 
+                      onError={(e) => {
+                        e.target.src = "https://www.gstatic.com/images/icons/material/system/1x/broken_image_grey600_18dp.png";
+                      }}
+                    />
+                    <div className="image-card-info">
+                      <div className="image-card-name" title={img.name}>{img.name}</div>
+                      <div className="image-card-actions">
+                        <button 
+                          className="btn-card-action"
+                          onClick={() => handleCreateProductFromImage(img)}
+                          title="Criar novo produto com esta imagem"
+                        >
+                          + Produto
+                        </button>
+                        <button 
+                          className="btn-card-action"
+                          onClick={() => handleSetAsCoverImage(img.id)}
+                          title="Usar na capa"
+                        >
+                          Capa
+                        </button>
+                        <button 
+                          className="btn-card-action btn-card-delete"
+                          onClick={() => handleDeleteImage(img.id)}
+                          title="Excluir imagem"
+                        >
+                          Excluir
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </aside>
 
@@ -683,7 +1018,7 @@ function App() {
               
               <div className="cover-hero-image-container">
                 <img 
-                  src={`https://drive.google.com/thumbnail?id=${coverImageId}&sz=w1000`} 
+                  src={coverImgSrc} 
                   alt="Capa Casaê" 
                   className="cover-hero-image"
                   onError={(e) => {

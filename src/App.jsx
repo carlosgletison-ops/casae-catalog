@@ -17,8 +17,25 @@ import initialProducts from './data/products.json';
 const generateProductId = () => `prod_${Date.now()}`;
 
 function App() {
-  // Lista de categorias oficiais solicitadas pelo usuário
-  const categoriesList = ["Tecidos", "Porcelanas", "Decoração", "Essências", "Linha Corpo"];
+  // Lista de categorias dinâmicas que podem ser editadas pelo usuário
+  const [categoriesList, setCategoriesList] = useState(() => {
+    try {
+      const saved = localStorage.getItem('casae_catalog_categories_v3');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.error("Erro ao ler categorias", e);
+    }
+    return ["Tecidos", "Porcelanas", "Decoração", "Essências", "Linha Corpo"];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('casae_catalog_categories_v3', JSON.stringify(categoriesList));
+  }, [categoriesList]);
 
   // Estado principal carregando do localStorage ou arquivo JSON inicial com migração
   const [products, setProducts] = useState(() => {
@@ -104,6 +121,11 @@ function App() {
   const [driveUrlInput, setDriveUrlInput] = useState('https://drive.google.com/drive/folders/1pyRnlVdneHazdxZHCCsuOq6AzWe4mzbT?usp=sharing');
   const [isImporting, setIsImporting] = useState(false);
 
+  // Estados para gerenciamento de categorias
+  const [newCategoryInput, setNewCategoryInput] = useState('');
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [renameValue, setRenameValue] = useState('');
+
   // Restaurar dados originais
   const handleResetData = () => {
     if (window.confirm("Deseja mesmo redefinir o catálogo para as 50 fotos originais do Drive com as novas categorias? Suas alterações serão perdidas.")) {
@@ -121,6 +143,60 @@ function App() {
       );
       setAvailableImages(uniqueInitial);
       setCoverImageId(initialProducts[0].imageId);
+    }
+  };
+
+  // Gerenciamento de Categorias
+  const handleAddCategory = (newCatName) => {
+    const trimmed = newCatName.trim();
+    if (!trimmed) return;
+    if (categoriesList.includes(trimmed)) {
+      alert("Esta categoria já existe!");
+      return;
+    }
+    setCategoriesList([...categoriesList, trimmed]);
+  };
+
+  const handleRenameCategory = (oldName, newName) => {
+    const trimmed = newName.trim();
+    if (!trimmed || oldName === trimmed) return;
+    if (categoriesList.includes(trimmed)) {
+      alert("Esta categoria já existe!");
+      return;
+    }
+    setCategoriesList(categoriesList.map(cat => cat === oldName ? trimmed : cat));
+    setProducts(products.map(p => p.category === oldName ? { ...p, category: trimmed } : p));
+    if (selectedProduct && selectedProduct.category === oldName) {
+      setSelectedProduct({ ...selectedProduct, category: trimmed });
+    }
+    if (selectedCategoryFilter === oldName) {
+      setSelectedCategoryFilter(trimmed);
+    }
+  };
+
+  const handleDeleteCategory = (catName) => {
+    if (categoriesList.length <= 1) {
+      alert("O catálogo precisa ter pelo menos uma categoria!");
+      return;
+    }
+    
+    const count = products.filter(p => p.category === catName).length;
+    if (count > 0) {
+      const confirmDelete = window.confirm(
+        `Existem ${count} produto(s) na categoria "${catName}". Se você excluí-la, esses produtos serão movidos para a categoria "${categoriesList.find(c => c !== catName)}". Deseja continuar?`
+      );
+      if (!confirmDelete) return;
+    }
+
+    const fallbackCategory = categoriesList.find(c => c !== catName);
+    
+    setCategoriesList(categoriesList.filter(c => c !== catName));
+    setProducts(products.map(p => p.category === catName ? { ...p, category: fallbackCategory } : p));
+    if (selectedProduct && selectedProduct.category === catName) {
+      setSelectedProduct({ ...selectedProduct, category: fallbackCategory });
+    }
+    if (selectedCategoryFilter === catName) {
+      setSelectedCategoryFilter('Todos');
     }
   };
 
@@ -219,7 +295,32 @@ function App() {
           return [...filteredNew, ...prev];
         });
 
-        alert(`Importadas com sucesso ${uniqueResults.length} imagens da pasta do Google Drive!`);
+        // Criar produtos automaticamente para as novas imagens que não estão cadastradas
+        const newProducts = [];
+        uniqueResults.forEach((file, idx) => {
+          const exists = products.some(p => p.imageId === file.id);
+          if (!exists) {
+            const cat = categoriesList[idx % categoriesList.length];
+            const cleanName = file.name.replace(/\.[^/.]+$/, "");
+            newProducts.push({
+              id: `prod_drive_${file.id}`,
+              name: `${cat} ${cleanName}`,
+              category: cat,
+              price: 0.00,
+              description: `Item elegante da categoria ${cat} com acabamento de alta curadoria.`,
+              imageName: file.name,
+              imageId: file.id,
+              imageUrl: `https://drive.google.com/thumbnail?id=${file.id}&sz=w800`,
+              isActive: true
+            });
+          }
+        });
+
+        if (newProducts.length > 0) {
+          setProducts(prev => [...prev, ...newProducts]);
+        }
+
+        alert(`Importação concluída! ${uniqueResults.length} imagens carregadas e ${newProducts.length} novos produtos adicionados e categorizados!`);
       } catch (err) {
         console.error("Erro ao importar do drive", err);
         alert("Ocorreu um erro ao importar a pasta. Verifique se o link é público e tente novamente.");
@@ -727,6 +828,139 @@ function App() {
                   value={catalogYear}
                   onChange={(e) => setCatalogYear(e.target.value)}
                 />
+              </div>
+
+              <div className="section-title" style={{ marginTop: '16px' }}>Categorias do Catálogo</div>
+              
+              <div className="category-add-form" style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                <input 
+                  type="text" 
+                  placeholder="Nova categoria..." 
+                  value={newCategoryInput}
+                  onChange={(e) => setNewCategoryInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      handleAddCategory(newCategoryInput);
+                      setNewCategoryInput('');
+                    }
+                  }}
+                  style={{ flex: 1, fontSize: '13px' }}
+                />
+                <button 
+                  className="btn-primary" 
+                  onClick={() => {
+                    handleAddCategory(newCategoryInput);
+                    setNewCategoryInput('');
+                  }}
+                  style={{ padding: '10px 14px' }}
+                  type="button"
+                >
+                  <Plus size={16} />
+                </button>
+              </div>
+
+              <div className="categories-list" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '12px' }}>
+                {categoriesList.map(cat => {
+                  const isEditing = editingCategory === cat;
+                  const prodCount = products.filter(p => p.category === cat && p.isActive).length;
+                  
+                  return (
+                    <div key={cat} className="category-item-row" style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '8px 12px',
+                      backgroundColor: '#faf9f6',
+                      border: '1px solid var(--border)',
+                      borderRadius: '6px',
+                      gap: '8px'
+                    }}>
+                      {isEditing ? (
+                        <input
+                          type="text"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          style={{
+                            flex: 1,
+                            fontSize: '13px',
+                            padding: '4px 8px',
+                            border: '1px solid var(--accent)',
+                            borderRadius: '4px',
+                            backgroundColor: '#ffffff'
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              handleRenameCategory(cat, renameValue);
+                              setEditingCategory(null);
+                            } else if (e.key === 'Escape') {
+                              setEditingCategory(null);
+                            }
+                          }}
+                          autoFocus
+                        />
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+                          <span style={{ fontSize: '13px', fontWeight: '500', color: 'var(--text-main)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {cat}
+                          </span>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                            {prodCount} produto(s) ativo(s)
+                          </span>
+                        </div>
+                      )}
+                      
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        {isEditing ? (
+                          <>
+                            <button 
+                              className="btn-card-action" 
+                              onClick={() => {
+                                handleRenameCategory(cat, renameValue);
+                                setEditingCategory(null);
+                              }}
+                              style={{ padding: '4px 8px', fontSize: '11px' }}
+                              type="button"
+                            >
+                              Salvar
+                            </button>
+                            <button 
+                              className="btn-card-action" 
+                              onClick={() => setEditingCategory(null)}
+                              style={{ padding: '4px 8px', fontSize: '11px', backgroundColor: '#e5e5e5', color: '#666' }}
+                              type="button"
+                            >
+                              Canc.
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button 
+                              className="btn-icon-only" 
+                              onClick={() => {
+                                setEditingCategory(cat);
+                                setRenameValue(cat);
+                              }}
+                              title="Renomear categoria"
+                              style={{ padding: '6px' }}
+                              type="button"
+                            >
+                              <Edit2 size={14} />
+                            </button>
+                            <button 
+                              className="btn-icon-only" 
+                              onClick={() => handleDeleteCategory(cat)}
+                              title="Excluir categoria"
+                              style={{ padding: '6px' }}
+                              type="button"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="section-title" style={{ marginTop: '16px' }}>Capa & Contra-capa</div>

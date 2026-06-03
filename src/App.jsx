@@ -17,50 +17,23 @@ import initialProducts from './data/products.json';
 const generateProductId = () => `prod_${Date.now()}`;
 
 function App() {
-  // Lista de categorias dinâmicas que podem ser editadas pelo usuário
-  const [categoriesList, setCategoriesList] = useState(() => {
-    try {
-      const saved = localStorage.getItem('casae_catalog_categories_v3');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.error("Erro ao ler categorias", e);
-    }
-    return ["Tecidos", "Porcelanas", "Decoração", "Essências", "Linha Corpo"];
-  });
+  const defaultCategories = ["Tecidos", "Porcelanas", "Decoração", "Essências", "Linha Corpo"];
+  const defaultProducts = initialProducts.map(p => ({ ...p, isActive: true }));
+  const initialImages = initialProducts.map(p => ({
+    id: p.imageId,
+    name: p.imageName,
+    url: p.imageUrl,
+    isDrive: p.imageUrl.includes('drive.google.com')
+  }));
+  const defaultImages = initialImages.filter((value, index, self) =>
+    self.findIndex(t => t.id === value.id) === index
+  );
 
-  useEffect(() => {
-    localStorage.setItem('casae_catalog_categories_v3', JSON.stringify(categoriesList));
-  }, [categoriesList]);
+  // Lista de categorias dinâmicas que podem ser editadas pelo usuário
+  const [categoriesList, setCategoriesList] = useState(defaultCategories);
 
   // Estado principal carregando do localStorage ou arquivo JSON inicial com migração
-  const [products, setProducts] = useState(() => {
-    const initialList = initialProducts.map(p => ({ ...p, isActive: true }));
-    try {
-      const saved = localStorage.getItem('casae_catalog_products_v3');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Merge: keep all parsed products, and append any products from initialProducts that aren't there
-          const parsedIds = new Set(parsed.map(p => p.id));
-          const newFromInitial = initialList.filter(p => !parsedIds.has(p.id));
-          return [...parsed, ...newFromInitial];
-        }
-      }
-    } catch (e) {
-      console.error("Erro ao ler produtos do localStorage", e);
-    }
-    return initialList;
-  });
-
-  // Salvar no localStorage sempre que os produtos mudarem
-  useEffect(() => {
-    localStorage.setItem('casae_catalog_products_v3', JSON.stringify(products));
-  }, [products]);
+  const [products, setProducts] = useState(defaultProducts);
 
   // Configurações do Catálogo
   const [companyName, setCompanyName] = useState('Casaê');
@@ -85,45 +58,223 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   
   // Imagem de Capa (usa por padrão o ID do primeiro produto ou customizável)
-  const [coverImageId, setCoverImageId] = useState(products[0]?.imageId || '12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8');
+  const [coverImageId, setCoverImageId] = useState('12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8');
 
   // Estado da Interface
   const [activeTab, setActiveTab] = useState('products'); // 'products', 'settings' ou 'uploads'
   const [selectedProduct, setSelectedProduct] = useState(null);
 
   // Estado de imagens disponíveis (originais, uploads locais e drive importados)
-  const [availableImages, setAvailableImages] = useState(() => {
-    const initial = initialProducts.map(p => ({
-      id: p.imageId,
-      name: p.imageName,
-      url: p.imageUrl,
-      isDrive: p.imageUrl.includes('drive.google.com')
-    }));
-    const uniqueInitial = initial.filter((value, index, self) =>
-      self.findIndex(t => t.id === value.id) === index
-    );
+  const [availableImages, setAvailableImages] = useState(defaultImages);
 
+  // Flag de carregamento completo
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  // Auxiliar para salvar no servidor
+  const saveToServer = async (statePayload) => {
     try {
-      const saved = localStorage.getItem('casae_catalog_available_images_v3');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Merge: keep parsed and add any from uniqueInitial that aren't there
-          const parsedIds = new Set(parsed.map(img => img.id));
-          const newFromInitial = uniqueInitial.filter(img => !parsedIds.has(img.id));
-          return [...parsed, ...newFromInitial];
-        }
-      }
+      await fetch('/api/catalog', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(statePayload)
+      });
     } catch (e) {
-      console.error("Erro ao ler imagens disponíveis", e);
+      console.error("Erro ao salvar no servidor", e);
     }
-    return uniqueInitial;
-  });
+  };
 
-  // Salvar imagens no localStorage sempre que mudarem
+  // Carregar e sincronizar estado no montamento
   useEffect(() => {
-    localStorage.setItem('casae_catalog_available_images_v3', JSON.stringify(availableImages));
-  }, [availableImages]);
+    const syncWithServer = async () => {
+      let localState = null;
+      try {
+        const fullStateStr = localStorage.getItem('casae_catalog_full_state_v3');
+        if (fullStateStr) {
+          localState = JSON.parse(fullStateStr);
+        } else {
+          const oldProducts = localStorage.getItem('casae_catalog_products_v3');
+          const oldCategories = localStorage.getItem('casae_catalog_categories_v3');
+          const oldImages = localStorage.getItem('casae_catalog_available_images_v3');
+          
+          if (oldProducts || oldCategories || oldImages) {
+            localState = {
+              products: oldProducts ? JSON.parse(oldProducts) : defaultProducts,
+              categoriesList: oldCategories ? JSON.parse(oldCategories) : defaultCategories,
+              availableImages: oldImages ? JSON.parse(oldImages) : defaultImages,
+              settings: {
+                companyName: localStorage.getItem('casae_companyName') || 'Casaê',
+                companyTagline: localStorage.getItem('casae_companyTagline') || 'Decoração e Tecidos',
+                catalogSubtitle: localStorage.getItem('casae_catalogSubtitle') || 'Curadoria & Catálogo de Preços',
+                catalogYear: localStorage.getItem('casae_catalogYear') || 'Coleção Outono / Inverno 2026',
+                phone: localStorage.getItem('casae_phone') || '(32) 99881-2233',
+                instagram: localStorage.getItem('casae_instagram') || '@casae_loja',
+                email: localStorage.getItem('casae_email') || 'contato@casae.com.br',
+                address: localStorage.getItem('casae_address') || 'Rua Direita, 45 — Centro Histórico, Tiradentes - MG',
+                website: localStorage.getItem('casae_website') || 'casae-contato.vercel.app',
+                gridCols: Number(localStorage.getItem('casae_gridCols')) || 2,
+                showDescriptions: localStorage.getItem('casae_showDescriptions') !== 'false',
+                showCode: localStorage.getItem('casae_showCode') !== 'false',
+                includeCover: localStorage.getItem('casae_includeCover') !== 'false',
+                includeBackCover: localStorage.getItem('casae_includeBackCover') !== 'false',
+                coverImageId: localStorage.getItem('casae_coverImageId') || '12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8'
+              },
+              lastUpdated: Date.now()
+            };
+          }
+        }
+      } catch (e) {
+        console.error("Erro ao carregar estado local", e);
+      }
+
+      let serverState = null;
+      try {
+        const response = await fetch('/api/catalog');
+        if (response.ok) {
+          const text = await response.text();
+          if (text) {
+            serverState = JSON.parse(text);
+          }
+        }
+      } catch (e) {
+        console.error("Erro ao buscar do servidor", e);
+      }
+
+      let chosenState = null;
+      const serverHasData = serverState && serverState.products && serverState.products.length > 0;
+      const localHasData = localState && localState.products && localState.products.length > 0;
+
+      if (serverHasData && localHasData) {
+        if (localState.lastUpdated > (serverState.lastUpdated || 0)) {
+          console.log("Estado local mais novo detectado. Atualizando servidor...");
+          chosenState = localState;
+          await saveToServer(localState);
+        } else {
+          console.log("Estado do servidor mais novo. Atualizando local...");
+          chosenState = serverState;
+          localStorage.setItem('casae_catalog_full_state_v3', JSON.stringify(serverState));
+        }
+      } else if (serverHasData) {
+        console.log("Estado do servidor carregado.");
+        chosenState = serverState;
+        localStorage.setItem('casae_catalog_full_state_v3', JSON.stringify(serverState));
+      } else if (localHasData) {
+        console.log("Estado local carregado. Sincronizando com servidor...");
+        chosenState = localState;
+        await saveToServer(localState);
+      } else {
+        console.log("Carregando padrões e inicializando servidor...");
+        chosenState = {
+          products: defaultProducts,
+          categoriesList: defaultCategories,
+          availableImages: defaultImages,
+          settings: {
+            companyName: 'Casaê',
+            companyTagline: 'Decoração e Tecidos',
+            catalogSubtitle: 'Curadoria & Catálogo de Preços',
+            catalogYear: 'Coleção Outono / Inverno 2026',
+            phone: '(32) 99881-2233',
+            instagram: '@casae_loja',
+            email: 'contato@casae.com.br',
+            address: 'Rua Direita, 45 — Centro Histórico, Tiradentes - MG',
+            website: 'casae-contato.vercel.app',
+            gridCols: 2,
+            showDescriptions: true,
+            showCode: true,
+            includeCover: true,
+            includeBackCover: true,
+            coverImageId: '12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8'
+          },
+          lastUpdated: Date.now()
+        };
+        await saveToServer(chosenState);
+      }
+
+      if (chosenState) {
+        setProducts(chosenState.products);
+        setCategoriesList(chosenState.categoriesList);
+        setAvailableImages(chosenState.availableImages);
+        
+        const s = chosenState.settings || {};
+        if (s.companyName !== undefined) setCompanyName(s.companyName);
+        if (s.companyTagline !== undefined) setCompanyTagline(s.companyTagline);
+        if (s.catalogSubtitle !== undefined) setCatalogSubtitle(s.catalogSubtitle);
+        if (s.catalogYear !== undefined) setCatalogYear(s.catalogYear);
+        if (s.phone !== undefined) setPhone(s.phone);
+        if (s.instagram !== undefined) setInstagram(s.instagram);
+        if (s.email !== undefined) setEmail(s.email);
+        if (s.address !== undefined) setAddress(s.address);
+        if (s.website !== undefined) setWebsite(s.website);
+        if (s.gridCols !== undefined) setGridCols(s.gridCols);
+        if (s.showDescriptions !== undefined) setShowDescriptions(s.showDescriptions);
+        if (s.showCode !== undefined) setShowCode(s.showCode);
+        if (s.includeCover !== undefined) setIncludeCover(s.includeCover);
+        if (s.includeBackCover !== undefined) setIncludeBackCover(s.includeBackCover);
+        if (s.coverImageId !== undefined) setCoverImageId(s.coverImageId);
+      }
+      setIsLoaded(true);
+    };
+    
+    syncWithServer();
+  }, []);
+
+  // Salvar estado localmente e enviar debounced para o servidor ao mudar
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    const fullState = {
+      products,
+      categoriesList,
+      availableImages,
+      settings: {
+        companyName,
+        companyTagline,
+        catalogSubtitle,
+        catalogYear,
+        phone,
+        instagram,
+        email,
+        address,
+        website,
+        gridCols,
+        showDescriptions,
+        showCode,
+        includeCover,
+        includeBackCover,
+        coverImageId
+      },
+      lastUpdated: Date.now()
+    };
+
+    localStorage.setItem('casae_catalog_full_state_v3', JSON.stringify(fullState));
+
+    const timeoutId = setTimeout(() => {
+      saveToServer(fullState);
+    }, 1000);
+
+    return () => clearTimeout(timeoutId);
+  }, [
+    isLoaded,
+    products,
+    categoriesList,
+    availableImages,
+    companyName,
+    companyTagline,
+    catalogSubtitle,
+    catalogYear,
+    phone,
+    instagram,
+    email,
+    address,
+    website,
+    gridCols,
+    showDescriptions,
+    showCode,
+    includeCover,
+    includeBackCover,
+    coverImageId
+  ]);
 
   // Estados para importação do Google Drive
   const [driveUrlInput, setDriveUrlInput] = useState('https://drive.google.com/drive/folders/1pyRnlVdneHazdxZHCCsuOq6AzWe4mzbT?usp=sharing');
@@ -561,6 +712,15 @@ function App() {
   const handlePrint = () => {
     window.print();
   };
+
+  if (!isLoaded) {
+    return (
+      <div className="loading-overlay" style={{ height: '100vh', width: '100vw', display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
+        <div className="spinner"></div>
+        <p style={{ marginTop: '16px', fontFamily: 'var(--font-serif)', fontSize: '18px', color: 'var(--text-main)' }}>Carregando catálogo da Casaê...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="app-container">

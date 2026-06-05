@@ -16,6 +16,56 @@ import initialProducts from './data/products.json';
 // Helper function to generate unique product IDs to satisfy react compiler purity rule
 const generateProductId = () => `prod_${Date.now()}`;
 
+// IndexedDB wrapper to bypass localStorage size limit (5MB) when storing Base64 images
+const DB_NAME = 'CasaeCatalogDB';
+const STORE_NAME = 'stateStore';
+const DB_VERSION = 1;
+
+const openDB = () => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    request.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        db.createObjectStore(STORE_NAME);
+      }
+    };
+    request.onsuccess = (e) => resolve(e.target.result);
+    request.onerror = (e) => reject(e.target.error);
+  });
+};
+
+const getIDBState = async (key) => {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readonly');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.get(key);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  } catch (e) {
+    console.error("IndexedDB read error:", e);
+    return null;
+  }
+};
+
+const setIDBState = async (key, val) => {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction(STORE_NAME, 'readwrite');
+      const store = transaction.objectStore(STORE_NAME);
+      const request = store.put(val, key);
+      request.onsuccess = () => resolve();
+      request.onerror = () => reject(request.error);
+    });
+  } catch (e) {
+    console.error("IndexedDB write error:", e);
+  }
+};
+
 function App() {
   const defaultCategories = ["Tecidos", "Porcelanas", "Decoração", "Essências", "Linha Corpo"];
   const defaultProducts = initialProducts.map(p => ({ ...p, isActive: true }));
@@ -90,38 +140,43 @@ function App() {
     const syncWithServer = async () => {
       let localState = null;
       try {
-        const fullStateStr = localStorage.getItem('casae_catalog_full_state_v3');
-        if (fullStateStr) {
-          localState = JSON.parse(fullStateStr);
-        } else {
-          const oldProducts = localStorage.getItem('casae_catalog_products_v3');
-          const oldCategories = localStorage.getItem('casae_catalog_categories_v3');
-          const oldImages = localStorage.getItem('casae_catalog_available_images_v3');
-          
-          if (oldProducts || oldCategories || oldImages) {
-            localState = {
-              products: oldProducts ? JSON.parse(oldProducts) : defaultProducts,
-              categoriesList: oldCategories ? JSON.parse(oldCategories) : defaultCategories,
-              availableImages: oldImages ? JSON.parse(oldImages) : defaultImages,
-              settings: {
-                companyName: localStorage.getItem('casae_companyName') || 'Casaê',
-                companyTagline: localStorage.getItem('casae_companyTagline') || 'Decoração e Tecidos',
-                catalogSubtitle: localStorage.getItem('casae_catalogSubtitle') || 'Curadoria & Catálogo de Preços',
-                catalogYear: localStorage.getItem('casae_catalogYear') || 'Coleção Outono / Inverno 2026',
-                phone: localStorage.getItem('casae_phone') || '(32) 99881-2233',
-                instagram: localStorage.getItem('casae_instagram') || '@casae_loja',
-                email: localStorage.getItem('casae_email') || 'contato@casae.com.br',
-                address: localStorage.getItem('casae_address') || 'Rua Direita, 45 — Centro Histórico, Tiradentes - MG',
-                website: localStorage.getItem('casae_website') || 'casae-contato.vercel.app',
-                gridCols: Number(localStorage.getItem('casae_gridCols')) || 2,
-                showDescriptions: localStorage.getItem('casae_showDescriptions') !== 'false',
-                showCode: localStorage.getItem('casae_showCode') !== 'false',
-                includeCover: localStorage.getItem('casae_includeCover') !== 'false',
-                includeBackCover: localStorage.getItem('casae_includeBackCover') !== 'false',
-                coverImageId: localStorage.getItem('casae_coverImageId') || '12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8'
-              },
-              lastUpdated: Date.now()
-            };
+        // Tentar ler do IndexedDB primeiro devido ao limite do localStorage
+        localState = await getIDBState('casae_catalog_full_state_v3');
+        
+        if (!localState) {
+          const fullStateStr = localStorage.getItem('casae_catalog_full_state_v3');
+          if (fullStateStr) {
+            localState = JSON.parse(fullStateStr);
+          } else {
+            const oldProducts = localStorage.getItem('casae_catalog_products_v3');
+            const oldCategories = localStorage.getItem('casae_catalog_categories_v3');
+            const oldImages = localStorage.getItem('casae_catalog_available_images_v3');
+            
+            if (oldProducts || oldCategories || oldImages) {
+              localState = {
+                products: oldProducts ? JSON.parse(oldProducts) : defaultProducts,
+                categoriesList: oldCategories ? JSON.parse(oldCategories) : defaultCategories,
+                availableImages: oldImages ? JSON.parse(oldImages) : defaultImages,
+                settings: {
+                  companyName: localStorage.getItem('casae_companyName') || 'Casaê',
+                  companyTagline: localStorage.getItem('casae_companyTagline') || 'Decoração e Tecidos',
+                  catalogSubtitle: localStorage.getItem('casae_catalogSubtitle') || 'Curadoria & Catálogo de Preços',
+                  catalogYear: localStorage.getItem('casae_catalogYear') || 'Coleção Outono / Inverno 2026',
+                  phone: localStorage.getItem('casae_phone') || '(32) 99881-2233',
+                  instagram: localStorage.getItem('casae_instagram') || '@casae_loja',
+                  email: localStorage.getItem('casae_email') || 'contato@casae.com.br',
+                  address: localStorage.getItem('casae_address') || 'Rua Direita, 45 — Centro Histórico, Tiradentes - MG',
+                  website: localStorage.getItem('casae_website') || 'casae-contato.vercel.app',
+                  gridCols: Number(localStorage.getItem('casae_gridCols')) || 2,
+                  showDescriptions: localStorage.getItem('casae_showDescriptions') !== 'false',
+                  showCode: localStorage.getItem('casae_showCode') !== 'false',
+                  includeCover: localStorage.getItem('casae_includeCover') !== 'false',
+                  includeBackCover: localStorage.getItem('casae_includeBackCover') !== 'false',
+                  coverImageId: localStorage.getItem('casae_coverImageId') || '12Hj7fwMSlqlvjX7qTGNfKTyVx9QiHY-8'
+                },
+                lastUpdated: Date.now()
+              };
+            }
           }
         }
       } catch (e) {
@@ -153,12 +208,22 @@ function App() {
         } else {
           console.log("Estado do servidor mais novo. Atualizando local...");
           chosenState = serverState;
-          localStorage.setItem('casae_catalog_full_state_v3', JSON.stringify(serverState));
+          try {
+            localStorage.setItem('casae_catalog_full_state_v3', JSON.stringify(serverState));
+          } catch (e) {
+            console.warn("Falha ao salvar no localStorage (cota excedida), prosseguindo com IndexedDB", e);
+          }
+          await setIDBState('casae_catalog_full_state_v3', serverState);
         }
       } else if (serverHasData) {
         console.log("Estado do servidor carregado.");
         chosenState = serverState;
-        localStorage.setItem('casae_catalog_full_state_v3', JSON.stringify(serverState));
+        try {
+          localStorage.setItem('casae_catalog_full_state_v3', JSON.stringify(serverState));
+        } catch (e) {
+          console.warn("Falha ao salvar no localStorage (cota excedida), prosseguindo com IndexedDB", e);
+        }
+        await setIDBState('casae_catalog_full_state_v3', serverState);
       } else if (localHasData) {
         console.log("Estado local carregado. Sincronizando com servidor...");
         chosenState = localState;
@@ -247,7 +312,15 @@ function App() {
       lastUpdated: Date.now()
     };
 
-    localStorage.setItem('casae_catalog_full_state_v3', JSON.stringify(fullState));
+    // Salvar no IndexedDB (sem limites estritos de tamanho)
+    setIDBState('casae_catalog_full_state_v3', fullState);
+
+    // Salvar no localStorage como fallback rápido, silenciando erros de cota
+    try {
+      localStorage.setItem('casae_catalog_full_state_v3', JSON.stringify(fullState));
+    } catch (e) {
+      console.warn("localStorage quota exceeded, using IndexedDB and server as fallback.", e);
+    }
 
     const timeoutId = setTimeout(() => {
       saveToServer(fullState);

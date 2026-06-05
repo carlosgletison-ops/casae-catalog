@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const STATE_FILE = path.join(__dirname, 'src/data/catalog_state.json')
+const STATE_FILE = path.join(__dirname, 'catalog_state.json')
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -58,7 +58,7 @@ export default defineConfig({
   ],
   server: {
     watch: {
-      ignored: ['**/src/data/catalog_state.json']
+      ignored: ['**/catalog_state.json']
     }
   }
 })

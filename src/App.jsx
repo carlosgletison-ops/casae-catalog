@@ -191,9 +191,29 @@ function App() {
           if (text) {
             serverState = JSON.parse(text);
           }
+        } else {
+          // Em produção (GitHub Pages), a rota /api/catalog falha, então buscamos o arquivo estático catalog_state.json
+          const staticRes = await fetch('./catalog_state.json');
+          if (staticRes.ok) {
+            const text = await staticRes.text();
+            if (text) {
+              serverState = JSON.parse(text);
+            }
+          }
         }
       } catch (e) {
-        console.error("Erro ao buscar do servidor", e);
+        // Fallback em caso de erro na requisição (ex: rede offline)
+        try {
+          const staticRes = await fetch('./catalog_state.json');
+          if (staticRes.ok) {
+            const text = await staticRes.text();
+            if (text) {
+              serverState = JSON.parse(text);
+            }
+          }
+        } catch (staticErr) {
+          console.error("Erro ao carregar estado do servidor ou estático", staticErr);
+        }
       }
 
       let chosenState = null;
@@ -433,11 +453,39 @@ function App() {
   };
 
   // Upload Local de Arquivos de Imagem
-  const handleLocalUpload = (e) => {
+  const handleLocalUpload = async (e) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
     
-    Array.from(files).forEach(file => {
+    for (const file of Array.from(files)) {
+      try {
+        // Tentar enviar via endpoint de upload no servidor local
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          headers: {
+            'x-filename': encodeURIComponent(file.name)
+          },
+          body: file // Envia o arquivo de forma binária crua
+        });
+        
+        if (response.ok) {
+          const data = await response.json();
+          if (data && data.url) {
+            const newImg = {
+              id: `local_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+              name: file.name,
+              url: data.url, // URL estática do servidor: ./images/<filename>
+              isDrive: false
+            };
+            setAvailableImages(prev => [newImg, ...prev]);
+            continue; // Sucesso, pula o fallback
+          }
+        }
+      } catch (err) {
+        console.warn("Falha no upload para o servidor local, usando Base64 como fallback:", err);
+      }
+      
+      // Fallback: carregar como base64 em memória se estiver em produção / erro de API
       const reader = new FileReader();
       reader.onload = (event) => {
         const newImg = {
@@ -449,7 +497,7 @@ function App() {
         setAvailableImages(prev => [newImg, ...prev]);
       };
       reader.readAsDataURL(file);
-    });
+    }
   };
 
   // Importar arquivos/pasta do Google Drive

@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
-const STATE_FILE = path.join(__dirname, 'catalog_state.json')
+const STATE_FILE = path.join(__dirname, 'public/catalog_state.json')
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -20,6 +20,28 @@ export default defineConfig({
         server.middlewares.use((req, res, next) => {
           const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
           
+          if (url.pathname === '/api/upload' && req.method === 'POST') {
+            const filename = decodeURIComponent(req.headers['x-filename'] || `upload_${Date.now()}.jpg`);
+            const destPath = path.join(__dirname, 'public/images', filename);
+            const writeStream = fs.createWriteStream(destPath);
+            req.pipe(writeStream);
+            
+            writeStream.on('error', (err) => {
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ error: err.message }));
+            });
+
+            req.on('end', () => {
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ 
+                success: true, 
+                url: `./images/${filename}` 
+              }));
+            });
+            return;
+          }
+
           if (url.pathname === '/api/catalog') {
             if (req.method === 'GET') {
               res.setHeader('Content-Type', 'application/json')
@@ -58,7 +80,7 @@ export default defineConfig({
   ],
   server: {
     watch: {
-      ignored: ['**/catalog_state.json']
+      ignored: ['**/public/catalog_state.json']
     }
   }
 })

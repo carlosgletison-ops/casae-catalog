@@ -23,5 +23,3 @@ dist-ssr
 *.sln
 *.sw?
 
-# Local catalog state file
-catalog_state.json
